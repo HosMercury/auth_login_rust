@@ -1,12 +1,11 @@
 pub mod controllers;
 pub mod models;
 
-use axum::{response::IntoResponse, routing::get, Router};
-use axum_login::AuthManagerLayerBuilder;
+use axum_login::{permission_required, AuthManagerLayerBuilder};
+use controllers::{auth, protected, restricted};
 use models::user::Auth;
 use sqlx::postgres::PgPoolOptions;
-use std::env;
-use std::net::SocketAddr;
+use std::{env, net::SocketAddr};
 use time::Duration;
 use tower_sessions::{fred::prelude::*, Expiry, RedisStore, SessionManagerLayer};
 
@@ -14,6 +13,7 @@ use tower_sessions::{fred::prelude::*, Expiry, RedisStore, SessionManagerLayer};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ////////////////// DB //////////////////////////////
     dotenvy::dotenv().expect("error loading .env");
+
     let db_url: String = env::var("DATABASE_URL").unwrap();
 
     let db_pool = PgPoolOptions::new()
@@ -38,8 +38,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auth = Auth { db: db_pool };
     let auth_layer = AuthManagerLayerBuilder::new(auth, session_layer).build();
 
-    let app = Router::new()
-        .route("/", get(handler))
+    let app = restricted::router()
+        .route_layer(permission_required!(
+            Auth,
+            login_url = "/login",
+            "restricted.read",
+        ))
+        .merge(protected::router())
+        .route_layer(permission_required!(
+            Auth,
+            login_url = "/login",
+            "protected.read",
+            "protected.write",
+        ))
+        .merge(auth::router())
         .merge(controllers::auth::router())
         .layer(auth_layer);
 
@@ -50,8 +62,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     redis_conn.await??;
 
     Ok(())
-}
-
-async fn handler() -> impl IntoResponse {
-    "hello"
 }
